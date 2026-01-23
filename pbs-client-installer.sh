@@ -73,7 +73,7 @@ calculate_file_backup_size() {
             done
 
             # Calculate size (in KB) and add to total
-            local path_size=$(du -sk $exclude_args "$path" 2>/dev/null | awk '{print $1}' || echo "0")
+            local path_size=$(du -xsk $exclude_args "$path" 2>/dev/null | awk '{print $1}' || echo "0")
             total_size=$((total_size + path_size))
         fi
     done
