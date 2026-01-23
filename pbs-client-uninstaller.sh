@@ -94,21 +94,21 @@ confirm_uninstall() {
 remove_systemd_service() {
     log "Stopping and disabling systemd services..."
     
-    if systemctl is-active --quiet pbs-backup.timer; then
-        systemctl stop pbs-backup.timer
+    if systemctl is-active --quiet pbs-backup-default.timer; then
+        systemctl stop pbs-backup-default.timer
     fi
     
-    if systemctl is-enabled --quiet pbs-backup.timer; then
-        systemctl disable pbs-backup.timer
+    if systemctl is-enabled --quiet pbs-backup-default.timer; then
+        systemctl disable pbs-backup-default.timer
     fi
     
-    if systemctl is-active --quiet pbs-backup.service; then
-        systemctl stop pbs-backup.service
+    if systemctl is-active --quiet pbs-backup-default.service; then
+        systemctl stop pbs-backup-default.service
     fi
     
     # Remove service files
-    rm -f /etc/systemd/system/pbs-backup.service
-    rm -f /etc/systemd/system/pbs-backup.timer
+    rm -f /etc/systemd/system/pbs-backup-default.service
+    rm -f /etc/systemd/system/pbs-backup-default.timer
     
     systemctl daemon-reload
     
