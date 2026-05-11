@@ -54,12 +54,18 @@ detect_distro() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS=$ID
+        OS_PRETTY=$PRETTY_NAME
     else
         error "Cannot detect Linux distribution"
         exit 1
     fi
     
     OS=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+
+    # Pop!_OS uses Ubuntu packages, so uninstall it through the Debian path.
+    if [[ "$OS" == "pop" ]]; then
+        OS="ubuntu"
+    fi
 }
 
 # Confirm uninstallation
@@ -141,7 +147,7 @@ remove_config() {
 
 # Uninstall PBS client on Ubuntu/Debian
 uninstall_debian_based() {
-    log "Uninstalling PBS client on $OS..."
+    log "Uninstalling PBS client on ${OS_PRETTY:-$OS}..."
     
     if dpkg -l | grep -q proxmox-backup-client; then
         apt-get remove -y proxmox-backup-client
