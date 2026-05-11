@@ -553,15 +553,22 @@ detect_distro() {
         exit 1
     fi
     
-    info "Detected: $OS_PRETTY"
+    info "Detected: ${OS_PRETTY:-$OS $OS_VERSION}"
     
     # Normalize OS names
     OS=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+
+    # Pop!_OS uses Ubuntu package bases and can use the Ubuntu install path.
+    if [[ "$OS" == "pop" ]]; then
+        info "Using Ubuntu-compatible installation path for Pop!_OS"
+        OS="ubuntu"
+    fi
 }
 
 # Install PBS client on Ubuntu
 install_ubuntu() {
-    log "Installing Proxmox Backup Client on Ubuntu $OS_VERSION..."
+    local distro_name="${OS_PRETTY:-Ubuntu $OS_VERSION}"
+    log "Installing Proxmox Backup Client on $distro_name..."
     
     # Determine which repository to use
     if [[ "$OS_VERSION" == "24.04" ]] || [[ "$OS_VERSION" > "24" ]]; then
@@ -576,7 +583,7 @@ install_ubuntu() {
         REPO="bullseye"
         GPG_FILE="proxmox-release-bullseye.gpg"
     else
-        error "Unsupported Ubuntu version: $OS_VERSION"
+        error "Unsupported Ubuntu-compatible version: $OS_VERSION"
         exit 1
     fi
     
@@ -690,7 +697,7 @@ install_pbs_client() {
             ;;
         *)
             error "Unsupported distribution: $OS"
-            info "Supported distributions: Ubuntu, Debian, Arch Linux"
+            info "Supported distributions: Ubuntu, Pop!_OS, Debian, Arch Linux"
             exit 1
             ;;
     esac
