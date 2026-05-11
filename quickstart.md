@@ -32,7 +32,7 @@ On your PBS server web interface:
 
 ## Installation Flow
 
-1. Script detects your Linux distro
+1. Script detects your Linux distro, including Ubuntu-based Pop!_OS
 2. Installs correct PBS client version
 3. You answer prompts for:
    - PBS server details

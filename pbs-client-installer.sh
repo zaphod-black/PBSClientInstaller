@@ -561,7 +561,8 @@ detect_distro() {
 
 # Install PBS client on Ubuntu
 install_ubuntu() {
-    log "Installing Proxmox Backup Client on Ubuntu $OS_VERSION..."
+    local distro_name="${OS_PRETTY:-Ubuntu $OS_VERSION}"
+    log "Installing Proxmox Backup Client on $distro_name using Ubuntu-compatible packages..."
     
     # Determine which repository to use
     if [[ "$OS_VERSION" == "24.04" ]] || [[ "$OS_VERSION" > "24" ]]; then
@@ -679,7 +680,7 @@ install_arch() {
 # Main installation function
 install_pbs_client() {
     case "$OS" in
-        ubuntu)
+        ubuntu|pop)
             install_ubuntu
             ;;
         debian)
@@ -690,7 +691,7 @@ install_pbs_client() {
             ;;
         *)
             error "Unsupported distribution: $OS"
-            info "Supported distributions: Ubuntu, Debian, Arch Linux"
+            info "Supported distributions: Ubuntu, Pop!_OS, Debian, Arch Linux"
             exit 1
             ;;
     esac
