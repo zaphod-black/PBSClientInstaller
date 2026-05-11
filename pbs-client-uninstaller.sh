@@ -51,15 +51,29 @@ check_root() {
 
 # Detect Linux distribution
 detect_distro() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
+    local os_release_file="${OS_RELEASE_FILE:-/etc/os-release}"
+
+    if [ -f "$os_release_file" ]; then
+        . "$os_release_file"
+        OS="${ID:-}"
+        OS_ID="${ID:-}"
+        OS_ID_LIKE="${ID_LIKE:-}"
     else
         error "Cannot detect Linux distribution"
         exit 1
     fi
     
     OS=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+    OS_ID=$(echo "${OS_ID:-$OS}" | tr '[:upper:]' '[:lower:]')
+    OS_ID_LIKE=$(echo "${OS_ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')
+
+    case "$OS" in
+        pop|pop_os|pop-os)
+            if [[ " $OS_ID_LIKE " == *" ubuntu "* ]]; then
+                OS="ubuntu"
+            fi
+            ;;
+    esac
 }
 
 # Confirm uninstallation
@@ -239,4 +253,6 @@ main() {
     show_completion
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

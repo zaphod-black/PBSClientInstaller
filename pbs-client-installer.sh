@@ -537,19 +537,31 @@ check_root() {
 # Detect Linux distribution
 detect_distro() {
     log "Detecting Linux distribution..."
-    
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-        OS_VERSION=$VERSION_ID
-        OS_PRETTY=$PRETTY_NAME
-    elif [ -f /etc/lsb-release ]; then
-        . /etc/lsb-release
-        OS=$DISTRIB_ID
-        OS_VERSION=$DISTRIB_RELEASE
-        OS_PRETTY=$DISTRIB_DESCRIPTION
+
+    local os_release_file="${OS_RELEASE_FILE:-/etc/os-release}"
+    local lsb_release_file="${LSB_RELEASE_FILE:-/etc/lsb-release}"
+
+    if [ -f "$os_release_file" ]; then
+        . "$os_release_file"
+        OS="${ID:-}"
+        OS_ID="${ID:-}"
+        OS_ID_LIKE="${ID_LIKE:-}"
+        OS_VERSION="${VERSION_ID:-}"
+        OS_PRETTY="${PRETTY_NAME:-$OS}"
+    elif [ -f "$lsb_release_file" ]; then
+        . "$lsb_release_file"
+        OS="${DISTRIB_ID:-}"
+        OS_ID="$OS"
+        OS_ID_LIKE=""
+        OS_VERSION="${DISTRIB_RELEASE:-}"
+        OS_PRETTY="${DISTRIB_DESCRIPTION:-$OS}"
     else
         error "Cannot detect Linux distribution"
+        exit 1
+    fi
+
+    if [ -z "$OS" ]; then
+        error "Cannot detect Linux distribution ID"
         exit 1
     fi
     
@@ -557,6 +569,18 @@ detect_distro() {
     
     # Normalize OS names
     OS=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
+    OS_ID=$(echo "${OS_ID:-$OS}" | tr '[:upper:]' '[:lower:]')
+    OS_ID_LIKE=$(echo "${OS_ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')
+
+    # Pop!_OS is Ubuntu-based and uses the same PBS client repository mapping.
+    case "$OS" in
+        pop|pop_os|pop-os)
+            if [[ " $OS_ID_LIKE " == *" ubuntu "* ]]; then
+                info "Using Ubuntu-compatible install path for $OS_PRETTY"
+                OS="ubuntu"
+            fi
+            ;;
+    esac
 }
 
 # Install PBS client on Ubuntu
@@ -690,7 +714,7 @@ install_pbs_client() {
             ;;
         *)
             error "Unsupported distribution: $OS"
-            info "Supported distributions: Ubuntu, Debian, Arch Linux"
+            info "Supported distributions: Ubuntu, Pop!_OS, Debian, Arch Linux"
             exit 1
             ;;
     esac
@@ -2473,28 +2497,30 @@ main() {
     exit 1
 }
 
-# Parse command-line arguments
-case "${1:-}" in
-    --install)
-        install_script
-        ;;
-    --uninstall)
-        uninstall_script
-        ;;
-    --help|-h)
-        show_help
-        ;;
-    --version|-v)
-        show_version
-        ;;
-    "")
-        # No arguments - run interactive mode
-        main
-        ;;
-    *)
-        error "Unknown option: $1"
-        echo
-        echo "Run with --help for usage information"
-        exit 1
-        ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    # Parse command-line arguments
+    case "${1:-}" in
+        --install)
+            install_script
+            ;;
+        --uninstall)
+            uninstall_script
+            ;;
+        --help|-h)
+            show_help
+            ;;
+        --version|-v)
+            show_version
+            ;;
+        "")
+            # No arguments - run interactive mode
+            main
+            ;;
+        *)
+            error "Unknown option: $1"
+            echo
+            echo "Run with --help for usage information"
+            exit 1
+            ;;
+    esac
+fi
