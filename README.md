@@ -31,7 +31,7 @@ sudo PBSClientTool
 ### On Your System
 - Root/sudo access
 - Internet connection
-- Supported OS: Ubuntu 20.04+, Debian 10+, Arch Linux
+- Supported OS: Ubuntu 20.04+, Pop!_OS 20.04+, Debian 10+, Arch Linux
 - **Arch only:** Install `yay` first ([instructions](https://github.com/Jguer/yay))
 
 ### On Proxmox Backup Server
@@ -290,6 +290,7 @@ Having issues? See the [Troubleshooting Guide](TROUBLESHOOTING.md) for:
 | OS | Versions | Notes |
 |----|----------|-------|
 | Ubuntu | 20.04, 22.04, 24.04 | LTS only |
+| Pop!_OS | 20.04, 22.04, 24.04 | Uses the matching Ubuntu PBS client repository |
 | Debian | 10, 11, 12 | Stable |
 | Arch Linux | Rolling | Requires `yay` |
 
