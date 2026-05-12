@@ -128,6 +128,12 @@ wget http://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubu
 sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
 ```
 
+### Pop!_OS: Detected as Unsupported
+
+**Problem:** Older versions could report Pop!_OS as unsupported because `/etc/os-release` uses `ID=pop` even though Pop!_OS follows Ubuntu package bases.
+
+**Solution:** Update to the latest installer. Pop!_OS 20.04, 22.04, and 24.04 are handled through the same PBS client repository mapping as their matching Ubuntu releases.
+
 ### Arch Linux: libfuse3.so.3 Not Found
 
 **Error:**
