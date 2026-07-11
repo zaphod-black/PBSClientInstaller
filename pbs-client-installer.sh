@@ -685,7 +685,7 @@ install_pbs_client() {
         debian)
             install_debian
             ;;
-        arch|archlinux)
+        arch|archlinux|cachyos)
             install_arch
             ;;
         *)
@@ -1658,7 +1658,6 @@ EOF
     cat > /etc/systemd/system/pbs-backup.timer <<EOF
 [Unit]
 Description=Proxmox Backup Client Backup Timer
-Requires=pbs-backup.service
 
 [Timer]
 OnCalendar=${TIMER_ONCALENDAR}
@@ -1949,7 +1948,6 @@ EOF
     cat > "/etc/systemd/system/pbs-backup-${target_name}.timer" <<EOF
 [Unit]
 Description=Proxmox Backup Client Backup Timer - Target: $target_name
-Requires=pbs-backup-${target_name}.service
 
 [Timer]
 OnCalendar=${TIMER_ONCALENDAR}
