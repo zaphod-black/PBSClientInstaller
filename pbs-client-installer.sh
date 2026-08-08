@@ -564,10 +564,127 @@ detect_distro() {
     OS=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
 }
 
+# Detect CPU architecture
+detect_cpu() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# Install PBS client on arm64 (Raspberry Pi, ARM SBCs, Apple Silicon Linux).
+# The official Proxmox repository only ships amd64 binaries, so we use the
+# community arm64 packages from https://github.com/wofferl/proxmox-backup-arm64
+install_arm64_client() {
+    log "Installing Proxmox Backup Client for arm64..."
+
+    # Map OS version to the matching community build suite
+    local SUITE=""
+    case "$OS" in
+        debian)
+            case "$OS_VERSION" in
+                13*)
+                    SUITE="trixie"
+                    ;;
+                12*|11*)
+                    SUITE="bookworm"
+                    ;;
+                10*)
+                    error "No arm64 client available for Debian $OS_VERSION (builds exist for bookworm/trixie)"
+                    exit 1
+                    ;;
+                *)
+                    error "Unsupported Debian version for arm64: $OS_VERSION"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        ubuntu)
+            case "$OS_VERSION" in
+                25.*|26.*)
+                    SUITE="trixie"
+                    ;;
+                24.*|22.*|20.*)
+                    SUITE="bookworm"
+                    ;;
+                *)
+                    error "Unsupported Ubuntu version for arm64: $OS_VERSION"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *)
+            error "Unsupported distribution for arm64: $OS"
+            exit 1
+            ;;
+    esac
+    log "Using ${SUITE} arm64 build"
+
+    # Env override for pinning an explicit version
+    local PINNED_VERSION="${PROXMOX_ARM64_CLIENT_VERSION:-}"
+
+    local VERSION=""
+    local FALLBACK_VER="4.2.5-1"
+    [ "$SUITE" = "bookworm" ] && FALLBACK_VER="3.4.8-3"
+
+    if [ -n "$PINNED_VERSION" ]; then
+        VERSION="$PINNED_VERSION"
+        log "Using pinned client version: $VERSION"
+    else
+        # Resolve latest release for this suite from the GitHub API (no jq dependency)
+        local MAJOR="4"
+        [ "$SUITE" = "bookworm" ] && MAJOR="3"
+
+        local releases=""
+        releases=$(curl -sS --connect-timeout 15 --max-time 30 \
+            "https://api.github.com/repos/wofferl/proxmox-backup-arm64/releases?per_page=100" 2>/dev/null || true)
+
+        if [ -n "$releases" ]; then
+            VERSION=$(printf '%s' "$releases" \
+                | grep -oE '"tag_name": *"[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?"' \
+                | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' \
+                | grep -E "^${MAJOR}\." \
+                | sort -V | tail -n1)
+        fi
+
+        if [ -z "$VERSION" ]; then
+            warn "Could not resolve latest ${SUITE} release; falling back to $FALLBACK_VER"
+            VERSION="$FALLBACK_VER"
+        fi
+        log "Latest arm64 client version: $VERSION"
+    fi
+
+    local DEB_NAME="proxmox-backup-client_${VERSION}_arm64.deb"
+    local DEB_URL="https://github.com/wofferl/proxmox-backup-arm64/releases/download/${VERSION}/${DEB_NAME}"
+
+    log "Downloading ${DEB_NAME}..."
+    if ! curl -fsSL --connect-timeout 15 --max-time 120 "$DEB_URL" -o "/tmp/${DEB_NAME}"; then
+        error "Failed to download ${DEB_URL}"
+        info "Retry with a pinned version: PROXMOX_ARM64_CLIENT_VERSION=<version> sudo ./pbs-client-installer.sh --install"
+        exit 1
+    fi
+
+    log "Installing ${DEB_NAME}..."
+    if ! apt-get install -y "/tmp/${DEB_NAME}"; then
+        error "Installation failed"
+        exit 1
+    fi
+
+    rm -f "/tmp/${DEB_NAME}"
+    log "PBS client installed successfully"
+}
+
 # Install PBS client on Ubuntu
 install_ubuntu() {
     log "Installing Proxmox Backup Client on Ubuntu $OS_VERSION..."
-    
+
+    # On arm64 the official Proxmox repo only ships amd64 -> use community builds
+    if [ "$(detect_cpu)" = "arm64" ]; then
+        install_arm64_client
+        return 0
+    fi
+
     # Determine which repository to use
     case "$OS_VERSION" in
         25.*|26.*)
@@ -643,7 +760,13 @@ install_ubuntu() {
 # Install PBS client on Debian
 install_debian() {
     log "Installing Proxmox Backup Client on Debian $OS_VERSION..."
-    
+
+    # On arm64 the official Proxmox repo only ships amd64 -> use community builds
+    if [ "$(detect_cpu)" = "arm64" ]; then
+        install_arm64_client
+        return 0
+    fi
+
     # Determine repository based on Debian version
     case "$OS_VERSION" in
         13*)
@@ -2280,6 +2403,12 @@ OPTIONS:
                     Set how file-level backups detect changed files:
                     metadata = fast, only stores file metadata (needs PBS >= 3.0 server)
                     legacy   = full content scanning (compatible with older servers)
+
+ARCHITECTURES:
+    amd64           Uses the official Proxmox repository (default)
+    arm64           Uses community packages from wofferl/proxmox-backup-arm64
+                    (latest release resolved automatically; override with
+                    PROXMOX_ARM64_CLIENT_VERSION=<version>)
 
 INTERACTIVE MODE (default):
     Run without arguments to launch the interactive menu for managing backup targets.

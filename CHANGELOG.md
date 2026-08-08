@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Uses the modern `proxmox-backup-client snapshot list` subcommand in `test_connection()` and `test-connection.sh` (the deprecated bare `list` alias is removed)
 - **Native installer: target-aware reconfigure**
   - `reconfigure_connection()` / `reconfigure_backup_settings()` now read/write the selected target's config and restart that target's timer/service instead of always touching the legacy single-target config
+- **Native installer: arm64 support**
+  - On arm64 (Raspberry Pi, ARM SBCs, Apple Silicon Linux) the client is installed from the community packages at `wofferl/proxmox-backup-arm64`
+  - Latest release resolved automatically per distro suite (trixie / bookworm) via the GitHub API, with a pinned fallback version
+  - Pin an exact version with `PROXMOX_ARM64_CLIENT_VERSION=<version>`
+  - amd64 installs continue to use the official Proxmox repository unchanged
 - **Docker-based cross-platform solution (v1.2.0 - NEW!)**
   - Full Docker implementation for Windows, macOS, and Linux
   - Dockerfile with PBS client in Debian container

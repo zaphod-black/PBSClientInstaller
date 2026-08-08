@@ -33,6 +33,7 @@ sudo PBSClientTool
 - Internet connection
 - Supported OS: Ubuntu 20.04+, Debian 10+, Arch Linux
 - **Arch only:** Install `yay` first ([instructions](https://github.com/Jguer/yay))
+- **arm64 (Raspberry Pi, ARM SBCs, Apple Silicon Linux):** supported via community packages from [`wofferl/proxmox-backup-arm64`](https://github.com/wofferl/proxmox-backup-arm64). The latest release is resolved automatically; pin one with `PROXMOX_ARM64_CLIENT_VERSION=<version>` (optional).
 
 ### On Proxmox Backup Server
 
