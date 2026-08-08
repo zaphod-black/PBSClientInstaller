@@ -153,6 +153,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Manual backups always include block device even on non-Sunday
 - Script version bumped to 1.1.0 for multi-target support
 
+### Fixed
+- **Target-aware `reconfigure_connection()` no longer drops target-specific settings**
+  - When reconfiguring a named target, the full target config (PBS_SERVER, PBS_PORT, PBS_DATASTORE, TIMER_SCHEDULE, TIMER_ONCALENDAR, BLOCK_DEVICE_FREQUENCY, BLOCK_DEVICE_DAY) is now written, not just the legacy field subset
+  - Legacy single-target reconfigure writes the legacy config unchanged
+- **arm64 install no longer hard-requires `curl`**
+  - Falls back to `wget` when `curl` is not present (API lookup and .deb download)
+
 ### Added
 - **System-wide installation support**
   - New `--install` flag to install PBSClientTool to /usr/local/bin

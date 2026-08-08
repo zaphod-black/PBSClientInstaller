@@ -637,8 +637,13 @@ install_arm64_client() {
         [ "$SUITE" = "bookworm" ] && MAJOR="3"
 
         local releases=""
-        releases=$(curl -sS --connect-timeout 15 --max-time 30 \
-            "https://api.github.com/repos/wofferl/proxmox-backup-arm64/releases?per_page=100" 2>/dev/null || true)
+        if command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
+            releases=$(wget -qO- --connect-timeout=15 --timeout=30 \
+                "https://api.github.com/repos/wofferl/proxmox-backup-arm64/releases?per_page=100" 2>/dev/null || true)
+        else
+            releases=$(curl -sS --connect-timeout 15 --max-time 30 \
+                "https://api.github.com/repos/wofferl/proxmox-backup-arm64/releases?per_page=100" 2>/dev/null || true)
+        fi
 
         if [ -n "$releases" ]; then
             VERSION=$(printf '%s' "$releases" \
@@ -659,7 +664,12 @@ install_arm64_client() {
     local DEB_URL="https://github.com/wofferl/proxmox-backup-arm64/releases/download/${VERSION}/${DEB_NAME}"
 
     log "Downloading ${DEB_NAME}..."
-    if ! curl -fsSL --connect-timeout 15 --max-time 120 "$DEB_URL" -o "/tmp/${DEB_NAME}"; then
+    if command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
+        DOWNLOAD_OK=$(wget -q --connect-timeout=15 --timeout=120 -O "/tmp/${DEB_NAME}" "$DEB_URL" 2>/dev/null && echo ok || echo fail)
+    else
+        DOWNLOAD_OK=$(curl -fsSL --connect-timeout 15 --max-time 120 "$DEB_URL" -o "/tmp/${DEB_NAME}" 2>/dev/null && echo ok || echo fail)
+    fi
+    if [ "$DOWNLOAD_OK" != "ok" ]; then
         error "Failed to download ${DEB_URL}"
         info "Retry with a pinned version: PROXMOX_ARM64_CLIENT_VERSION=<version> sudo ./pbs-client-installer.sh --install"
         exit 1
@@ -950,7 +960,30 @@ reconfigure_connection() {
     # Strip any trailing newlines from password (defensive fix)
     PBS_PASSWORD_CLEAN=$(echo -n "$PBS_PASSWORD" | tr -d '\n\r')
 
-    cat > "$CONFIG_FILE" <<EOF
+    if [ -n "${TARGET_NAME:-}" ]; then
+        cat > "$CONFIG_FILE" <<EOF
+# PBS Client Configuration - Target: $TARGET_NAME
+PBS_SERVER="${PBS_SERVER}"
+PBS_PORT="${PBS_PORT}"
+PBS_DATASTORE="${PBS_DATASTORE}"
+PBS_REPOSITORY="${PBS_REPOSITORY}"
+PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
+BACKUP_TYPE="${BACKUP_TYPE}"
+BACKUP_PATHS="${BACKUP_PATHS}"
+EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS}"
+BLOCK_DEVICE="${BLOCK_DEVICE}"
+BLOCK_DEVICE_FREQUENCY="${BLOCK_DEVICE_FREQUENCY}"
+BLOCK_DEVICE_DAY="${BLOCK_DEVICE_DAY}"
+TIMER_SCHEDULE="${TIMER_SCHEDULE}"
+TIMER_ONCALENDAR="${TIMER_ONCALENDAR}"
+KEEP_LAST=${KEEP_LAST}
+KEEP_DAILY=${KEEP_DAILY}
+KEEP_WEEKLY=${KEEP_WEEKLY}
+KEEP_MONTHLY=${KEEP_MONTHLY}
+CHANGE_DETECTION_MODE="${CHANGE_DETECTION_MODE:-metadata}"
+EOF
+    else
+        cat > "$CONFIG_FILE" <<EOF
 # PBS Client Configuration
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
@@ -964,6 +997,7 @@ KEEP_WEEKLY=${KEEP_WEEKLY}
 KEEP_MONTHLY=${KEEP_MONTHLY}
 CHANGE_DETECTION_MODE="${CHANGE_DETECTION_MODE:-metadata}"
 EOF
+    fi
 
     chmod 600 "$CONFIG_FILE"
 
@@ -1638,7 +1672,7 @@ test_connection() {
         
         # Warn when metadata change-detection is used against a PBS server < 3.0
         # (metadata backups can only be restored by the server if it supports them)
-        SERVER_VERSION=$(proxmox-backup-client version 2>/dev/null | grep -oE 'server version: [0-9]+(\.[0-9]+)*' | awk '{print $3}')
+        SERVER_VERSION=$(timeout 5 proxmox-backup-client version 2>/dev/null | grep -oE 'server version: [0-9]+(\.[0-9]+)*' | awk '{print $3}')
         if [ "${CHANGE_DETECTION_MODE:-metadata}" = "metadata" ] && [ -n "$SERVER_VERSION" ]; then
             if printf '%s' "$SERVER_VERSION" | grep -qE '^(0|1|2)\.'; then
                 warn "PBS server $SERVER_VERSION may not fully support 'metadata' change detection"
@@ -2771,7 +2805,7 @@ case "${1:-}" in
     --version|-v)
         show_version
         ;;
---change-detection-mode|--mode)
+    --change-detection-mode|--mode)
         apply_change_detection_mode "${2:-}"
         ;;
     "")
