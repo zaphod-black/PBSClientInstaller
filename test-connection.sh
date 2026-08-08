@@ -112,7 +112,7 @@ echo ""
 # Test 3: List backup groups
 echo "Test 3: Datastore Access"
 echo "------------------------"
-if proxmox-backup-client list 2>&1; then
+if proxmox-backup-client snapshot list 2>&1; then
     echo ""
     echo "✓ Successfully accessed datastore"
 else

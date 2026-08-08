@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Native installer: configurable change-detection mode**
+  - New `--change-detection-mode` / `--mode METADATA|LEGACY` CLI flag (applies to existing configs)
+  - `CHANGE_DETECTION_MODE` persisted in legacy and per-target config files; backup scripts use it at runtime
+  - `test_connection()` warns when `metadata` mode is used against a PBS server older than 3.0
+  - `metadata` remains the default (fast incrementals); `legacy` restores full compatibility
+- **Native installer: Debian 13 / trixie and Ubuntu 25+ support**
+  - Uses the unified `proxmox-archive-keyring-trixie.gpg` keyring with `signed-by=` for trixie-based releases
+  - Existing legacy per-release keys (`/etc/apt/trusted.gpg.d/`) unchanged for older releases
+- **Native installer: submount point handling**
+  - `backup_files()` now discovers nested mount points (e.g. `/boot/efi` under `/`) via `findmnt -R` and adds `--include-dev` for each, in both legacy and per-target backup scripts
+- **Native installer: `snapshot list` command**
+  - Uses the modern `proxmox-backup-client snapshot list` subcommand in `test_connection()` and `test-connection.sh` (the deprecated bare `list` alias is removed)
+- **Native installer: target-aware reconfigure**
+  - `reconfigure_connection()` / `reconfigure_backup_settings()` now read/write the selected target's config and restart that target's timer/service instead of always touching the legacy single-target config
 - **Docker-based cross-platform solution (v1.2.0 - NEW!)**
   - Full Docker implementation for Windows, macOS, and Linux
   - Dockerfile with PBS client in Debian container
