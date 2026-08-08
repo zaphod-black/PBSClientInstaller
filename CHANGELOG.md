@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `backup_files()` now discovers nested mount points (e.g. `/boot/efi` under `/`) via `findmnt -R` and adds `--include-dev` for each, in both legacy and per-target backup scripts
 - **Native installer: `snapshot list` command**
   - Uses the modern `proxmox-backup-client snapshot list` subcommand in `test_connection()` and `test-connection.sh` (the deprecated bare `list` alias is removed)
+- **Native installer: optional PBS namespaces**
+  - Optional `PBS_NAMESPACE` config field (empty = root namespace) prompted during setup/reconfigure for both legacy and per-target configs
+  - `--ns` is threaded into backup, block-device, prune, and snapshot-list commands in generated scripts and connection tests
+  - `test-connection.sh` accepts an optional `--ns <namespace>` argument
+  - Requires a PBS server with namespaces (PBS 2.2+; supported in 3.x and 4.x)
 - **Native installer: target-aware reconfigure**
   - `reconfigure_connection()` / `reconfigure_backup_settings()` now read/write the selected target's config and restart that target's timer/service instead of always touching the legacy single-target config
 - **Native installer: arm64 support**

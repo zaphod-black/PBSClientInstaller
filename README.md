@@ -70,8 +70,9 @@ sudo PBSClientTool
 
 You'll be asked for:
 1. **PBS Server:** IP/hostname and port
-2. **Authentication:** API token (recommended) or password
-3. **Backup Type:**
+2. **Datastore:** Name of the datastore, plus an optional **namespace** (leave empty for the root namespace, e.g. `tenant1` or `a/b/c`)
+3. **Authentication:** API token (recommended) or password
+4. **Backup Type:**
    - File-level only (fast, selective restore)
    - Block device only (full disk image, bootable as VM)
    - **Both (recommended)** - Files daily + disk weekly
@@ -127,7 +128,7 @@ sudo journalctl -u pbs-backup-default.service -n 50
 # Follow logs in real-time
 sudo journalctl -fu pbs-backup-default.service
 
-# List all backups on server
+# List all backups on server (add --ns <namespace> for a specific namespace)
 sudo -E proxmox-backup-client snapshot list
 ```
 

@@ -904,6 +904,7 @@ reconfigure_connection() {
     PBS_SERVER=$(prompt "Enter PBS server IP/hostname" "192.168.1.181" | xargs)
     PBS_PORT=$(prompt "Enter PBS server port" "8007" | xargs)
     PBS_DATASTORE=$(prompt "Enter datastore name" "backups" | xargs)
+    PBS_NAMESPACE=$(prompt "Enter namespace (optional, empty = root)" "" | xargs)
 
     echo
     info "Authentication Method:"
@@ -966,6 +967,7 @@ reconfigure_connection() {
 PBS_SERVER="${PBS_SERVER}"
 PBS_PORT="${PBS_PORT}"
 PBS_DATASTORE="${PBS_DATASTORE}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
 BACKUP_TYPE="${BACKUP_TYPE}"
@@ -987,6 +989,7 @@ EOF
 # PBS Client Configuration
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
 BACKUP_TYPE="${BACKUP_TYPE}"
 BACKUP_PATHS="${BACKUP_PATHS}"
 EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS}"
@@ -1360,6 +1363,7 @@ interactive_config() {
     PBS_SERVER=$(prompt "Enter PBS server IP/hostname" "192.168.1.181" | xargs)
     PBS_PORT=$(prompt "Enter PBS server port" "8007" | xargs)
     PBS_DATASTORE=$(prompt "Enter datastore name" "backups" | xargs)
+    PBS_NAMESPACE=$(prompt "Enter namespace (optional, empty = root)" "" | xargs)
 
     echo
     info "Authentication Method:"
@@ -1666,7 +1670,11 @@ test_connection() {
 
     # Step 3: Verify datastore access by listing backup groups
     info "Step 3/3: Verifying datastore access..."
-    if timeout 15 proxmox-backup-client snapshot list 2>/dev/null; then
+    local NS_ARG=""
+    if [ -n "${PBS_NAMESPACE:-}" ]; then
+        NS_ARG="--ns ${PBS_NAMESPACE}"
+    fi
+    if timeout 15 proxmox-backup-client snapshot list $NS_ARG 2>/dev/null; then
         log "Datastore access verified"
         log "Connection test successful!"
         
@@ -1703,6 +1711,7 @@ create_systemd_service() {
 # PBS Client Configuration
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
 BACKUP_TYPE="${BACKUP_TYPE}"
 BACKUP_PATHS="${BACKUP_PATHS}"
 EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS}"
@@ -1730,6 +1739,13 @@ source /etc/proxmox-backup-client/config
 # Export for PBS client
 export PBS_REPOSITORY
 export PBS_PASSWORD
+export PBS_NAMESPACE
+
+# Optional namespace (empty = root namespace)
+NS_ARG=""
+if [ -n "${PBS_NAMESPACE:-}" ]; then
+    NS_ARG="--ns ${PBS_NAMESPACE}"
+fi
 
 HOSTNAME=$(hostname)
 BACKUP_SUCCESS=true
@@ -1774,7 +1790,7 @@ backup_files() {
     done
     
     # Add other options
-    BACKUP_CMD="$BACKUP_CMD --skip-lost-and-found --change-detection-mode=${CHANGE_DETECTION_MODE:-metadata}"
+    BACKUP_CMD="$BACKUP_CMD --skip-lost-and-found --change-detection-mode=${CHANGE_DETECTION_MODE:-metadata} $NS_ARG"
     
     # Execute backup
     if eval $BACKUP_CMD; then
@@ -1811,7 +1827,7 @@ backup_block_device() {
     DEVICE_NAME=$(basename "$BLOCK_DEVICE")
     
     # Create block device backup
-    if proxmox-backup-client backup "${DEVICE_NAME}.img:${BLOCK_DEVICE}"; then
+    if proxmox-backup-client backup "${DEVICE_NAME}.img:${BLOCK_DEVICE}" $NS_ARG; then
         log "Block device backup completed successfully"
         return 0
     else
@@ -1859,7 +1875,7 @@ if [ "$BACKUP_SUCCESS" = true ]; then
         --keep-last $KEEP_LAST \
         --keep-daily $KEEP_DAILY \
         --keep-weekly $KEEP_WEEKLY \
-        --keep-monthly $KEEP_MONTHLY
+        --keep-monthly $KEEP_MONTHLY $NS_ARG
     
     log "Backup and prune completed successfully"
 else
@@ -1950,6 +1966,7 @@ create_systemd_service_for_target() {
 PBS_SERVER="${PBS_SERVER}"
 PBS_PORT="${PBS_PORT}"
 PBS_DATASTORE="${PBS_DATASTORE}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
 BACKUP_TYPE="${BACKUP_TYPE}"
@@ -1983,6 +2000,13 @@ source $(get_target_config_path "$target_name")
 # Export for PBS client
 export PBS_REPOSITORY
 export PBS_PASSWORD
+export PBS_NAMESPACE
+
+# Optional namespace (empty = root namespace)
+NS_ARG=""
+if [ -n "\${PBS_NAMESPACE:-}" ]; then
+    NS_ARG="--ns \${PBS_NAMESPACE}"
+fi
 
 HOSTNAME=\$(hostname)
 BACKUP_SUCCESS=true
@@ -2027,7 +2051,7 @@ backup_files() {
     done
 
     # Add other options
-    BACKUP_CMD="\$BACKUP_CMD --skip-lost-and-found --change-detection-mode=\${CHANGE_DETECTION_MODE:-metadata}"
+    BACKUP_CMD="\$BACKUP_CMD --skip-lost-and-found --change-detection-mode=\${CHANGE_DETECTION_MODE:-metadata} \$NS_ARG"
 
     # Execute backup
     if eval \$BACKUP_CMD; then
@@ -2064,7 +2088,7 @@ backup_block_device() {
     DEVICE_NAME=\$(basename "\$BLOCK_DEVICE")
 
     # Create block device backup
-    if proxmox-backup-client backup "\${DEVICE_NAME}.img:\${BLOCK_DEVICE}"; then
+    if proxmox-backup-client backup "\${DEVICE_NAME}.img:\${BLOCK_DEVICE}" \$NS_ARG; then
         log "Block device backup completed successfully"
         return 0
     else
@@ -2161,7 +2185,7 @@ if [ "\$BACKUP_SUCCESS" = true ]; then
         --keep-last \$KEEP_LAST \\
         --keep-daily \$KEEP_DAILY \\
         --keep-weekly \$KEEP_WEEKLY \\
-        --keep-monthly \$KEEP_MONTHLY
+        --keep-monthly \$KEEP_MONTHLY \$NS_ARG
 
     log "Backup and prune completed successfully"
 else
@@ -2322,7 +2346,7 @@ show_summary() {
     echo "  Check timer status:  sudo systemctl status pbs-backup.timer"
     echo "  Check service logs:  sudo journalctl -u pbs-backup.service"
     echo "  Run backup now:      sudo systemctl start pbs-backup.service"
-    echo "  List backups:        sudo -E proxmox-backup-client snapshot list"
+    echo "  List backups:        sudo -E proxmox-backup-client snapshot list${PBS_NAMESPACE:+ --ns ${PBS_NAMESPACE}}"
     echo "  Disable backups:     sudo systemctl disable pbs-backup.timer"
     echo
     info "Configuration Files:"
