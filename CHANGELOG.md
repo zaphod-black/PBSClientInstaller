@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Docker-based cross-platform solution (v1.2.0 - IN DEVELOPMENT)**
+  - Full Docker implementation for Windows, macOS, and Linux
+  - Dockerfile with PBS client in Debian container
+  - Platform-specific docker-compose files (linux/windows/macos)
+  - Daemon mode with internal cron scheduler
+  - One-shot backup mode for manual runs
+  - REST API server for remote management (optional)
+  - Health monitoring and status endpoints
+  - Automatic encryption key generation and management
+  - Build and deployment scripts (`build.sh`, `deploy.sh`)
+  - Complete Docker documentation (README-DOCKER.md, QUICKSTART-DOCKER.md)
+  - Organized in `docker/` subdirectory
+  - Cross-platform backup support matrix in README
+  - Platform-specific exclusion patterns
+  - Metadata change detection for fast incrementals
+
+## [1.1.3] - 2026-08-08
+
+### Added
 - **Native installer: configurable change-detection mode**
   - New `--change-detection-mode` / `--mode METADATA|LEGACY` CLI flag (applies to existing configs)
   - `CHANGE_DETECTION_MODE` persisted in legacy and per-target config files; backup scripts use it at runtime
@@ -32,21 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Latest release resolved automatically per distro suite (trixie / bookworm) via the GitHub API, with a pinned fallback version
   - Pin an exact version with `PROXMOX_ARM64_CLIENT_VERSION=<version>`
   - amd64 installs continue to use the official Proxmox repository unchanged
-- **Docker-based cross-platform solution (v1.2.0 - NEW!)**
-  - Full Docker implementation for Windows, macOS, and Linux
-  - Dockerfile with PBS client in Debian container
-  - Platform-specific docker-compose files (linux/windows/macos)
-  - Daemon mode with internal cron scheduler
-  - One-shot backup mode for manual runs
-  - REST API server for remote management (optional)
-  - Health monitoring and status endpoints
-  - Automatic encryption key generation and management
-  - Build and deployment scripts (`build.sh`, `deploy.sh`)
-  - Complete Docker documentation (README-DOCKER.md, QUICKSTART-DOCKER.md)
-  - Organized in `docker/` subdirectory
-  - Cross-platform backup support matrix in README
-  - Platform-specific exclusion patterns
-  - Metadata change detection for fast incrementals
 - **Multi-target backup support (v1.1.0 - COMPLETE)**
   - Support for multiple backup destinations (different PBS servers for redundancy)
   - Named backup targets (e.g., "offsite", "local", "backup1")

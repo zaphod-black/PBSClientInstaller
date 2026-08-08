@@ -9,7 +9,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Script configuration
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.3"
 SCRIPT_NAME="PBSClientTool"
 INSTALL_PATH="/usr/local/bin/$SCRIPT_NAME"
 CONFIG_DIR="/etc/proxmox-backup-client"
