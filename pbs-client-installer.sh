@@ -1350,6 +1350,175 @@ run_backup_for_target() {
     fi
 }
 
+# Browse backups for a target (snapshot list + interactive catalog shell)
+browse_backups() {
+    echo
+    echo "Available targets:"
+    list_targets | nl
+    echo
+    USER_INPUT=$(prompt "Enter target number or name to browse" "")
+
+    if [ -z "$USER_INPUT" ]; then
+        error "No target specified"
+        return 1
+    fi
+
+    TARGET_NAME=$(resolve_target_input "$USER_INPUT")
+    if [ -z "$TARGET_NAME" ]; then
+        error "Invalid target number: $USER_INPUT"
+        return 1
+    fi
+
+    if ! validate_target_name "$TARGET_NAME"; then
+        return 1
+    fi
+
+    if ! target_exists "$TARGET_NAME"; then
+        error "Target '$TARGET_NAME' does not exist"
+        return 1
+    fi
+
+    local config_file="$(get_target_config_path "$TARGET_NAME")"
+    source "$config_file"
+
+    export PBS_REPOSITORY="$PBS_REPOSITORY"
+    export PBS_PASSWORD="$PBS_PASSWORD"
+    export PBS_NAMESPACE="${PBS_NAMESPACE:-}"
+
+    # Optional namespace (empty = root); used by snapshot list
+    local NS_ARG=""
+    if [ -n "${PBS_NAMESPACE:-}" ]; then
+        NS_ARG="--ns ${PBS_NAMESPACE}"
+    fi
+
+    # Step 1: list snapshots on the server
+    echo
+    info "Loading snapshots for target: $TARGET_NAME"
+    local SNAP_LIST
+    if ! SNAP_LIST=$(timeout 30 proxmox-backup-client snapshot list $NS_ARG 2>&1); then
+        warn "Could not list snapshots."
+        warn "If this is a fresh target, run a backup first."
+        echo "$SNAP_LIST" | tail -n2
+        return 1
+    fi
+
+    # Parse snapshot ids (first column) and their archive list (files column)
+    local PARSED SNAPSHOTS=() SNAPSHOT_FILES=()
+    PARSED=$(echo "$SNAP_LIST" | sed -E 's/[│┼├┤┬┴╪╞╡═─]//g' | awk '
+        {
+            if ($1 != "snapshot" && $1 ~ /^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[0-9]{4}-[0-9]{2}-[0-9]{2}T/) {
+                files="";
+                for (i=3; i<=NF; i++) files = files (i>3 ? " " : "") $i;
+                print $1 "\t" files;
+            }
+        }')
+
+    while IFS=$'\t' read -r snap files; do
+        [ -z "$snap" ] && continue
+        SNAPSHOTS+=("$snap")
+        SNAPSHOT_FILES+=("$files")
+    done <<< "$PARSED"
+
+    if [ ${#SNAPSHOTS[@]} -eq 0 ]; then
+        warn "No backups found in this datastore/namespace yet"
+        return 1
+    fi
+
+    # Step 2: let the user pick a snapshot
+    local SELECTED=""
+    while [ -z "$SELECTED" ]; do
+        echo
+        echo "Available snapshots for target: $TARGET_NAME"
+        echo "────────────────────────────────────────────"
+        local idx=1
+        for snap in "${SNAPSHOTS[@]}"; do
+            echo "  $idx) $snap"
+            idx=$((idx+1))
+        done
+        echo "  0) Go back"
+        echo
+        local CHOICE=$(prompt "Select a snapshot to explore [1-${#SNAPSHOTS[@]}]" "0")
+
+        if [ -z "$CHOICE" ] || [ "$CHOICE" = "0" ]; then
+            info "Cancelled"
+            return 0
+        fi
+
+        if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "${#SNAPSHOTS[@]}" ]; then
+            SELECTED="${SNAPSHOTS[$((CHOICE-1))]}"
+        else
+            error "Invalid choice: $CHOICE"
+        fi
+    done
+
+    browse_snapshot "$TARGET_NAME" "$SELECTED" "${SNAPSHOT_FILES[$((CHOICE-1))]}"
+}
+
+# Interactive browse menu for a single snapshot (catalog shell / catalog dump)
+browse_snapshot() {
+    local target="$1"
+    local snapshot="$2"
+    local files="$3"
+
+    # Browse commands support --ns (verified against the client command reference)
+    local NS_ARG=""
+    if [ -n "${PBS_NAMESPACE:-}" ]; then
+        NS_ARG="--ns ${PBS_NAMESPACE}"
+    fi
+
+    # Pick a default archive: prefer an existing .pxar/.mpxar if present
+    local DEFAULT_ARCHIVE=""
+    for f in $files; do
+        if [[ "$f" == *.pxar || "$f" == *.mpxar ]]; then
+            DEFAULT_ARCHIVE="$f"
+            break
+        fi
+    done
+    [ -z "$DEFAULT_ARCHIVE" ] && DEFAULT_ARCHIVE="root.pxar"
+
+    while true; do
+        echo
+        echo "════════════════════════════════════════"
+        echo "  Snapshot: $snapshot"
+        echo "════════════════════════════════════════"
+        echo
+        echo "  Archives in snapshot: $files"
+        echo
+        echo "  1) Interactive catalog shell (navigate, search, restore files)"
+        echo "  2) Catalog dump (read-only file listing)"
+        echo "  3) Choose a different snapshot"
+        echo "  4) Back to main menu"
+        echo
+        BROWSE_OPT=$(prompt "Select option [1-4]" "1")
+
+        case "$BROWSE_OPT" in
+            1)
+                local ARCHIVE
+                ARCHIVE=$(prompt "File archive to explore" "$DEFAULT_ARCHIVE")
+                [ -z "$ARCHIVE" ] && ARCHIVE="$DEFAULT_ARCHIVE"
+                echo
+                info "Starting interactive catalog shell (type 'help' for commands, 'exit' to quit)"
+                echo
+                proxmox-backup-client catalog shell "$snapshot" "$ARCHIVE" $NS_ARG
+                ;;
+            2)
+                echo
+                info "Catalog dump for $snapshot"
+                echo
+                proxmox-backup-client catalog dump "$snapshot" $NS_ARG
+                ;;
+            3)
+                browse_backups
+                return 0
+                ;;
+            4|*)
+                info "Back to main menu"
+                return 0
+                ;;
+        esac
+    done
+}
+
 # Interactive configuration
 interactive_config() {
     log "Starting interactive configuration..."
@@ -2551,16 +2720,17 @@ main() {
                 echo "  3) Edit existing target"
                 echo "  4) Delete target"
                 echo "  5) Run backup now (select target)"
-                echo "  6) Reinstall PBS client"
+                echo "  6) Browse backups (snapshot list + catalog shell)"
+                echo "  7) Reinstall PBS client"
 
                 # Only show install option if not already installed
                 if [ "$SCRIPT_INSTALLED" = false ]; then
-                    echo "  7) Install as system command"
+                    echo "  8) Install as system command"
+                    echo "  9) Exit"
+                    ACTION=$(prompt "Select option [1-9]" "9")
+                else
                     echo "  8) Exit"
                     ACTION=$(prompt "Select option [1-8]" "8")
-                else
-                    echo "  7) Exit"
-                    ACTION=$(prompt "Select option [1-7]" "7")
                 fi
 
                 case "$ACTION" in
@@ -2634,12 +2804,15 @@ main() {
                         run_backup_for_target "$TARGET_NAME"
                         ;;
                     6)
+                        browse_backups
+                        ;;
+                    7)
                         info "Reinstalling PBS client..."
                         install_pbs_client
                         log "PBS client reinstalled successfully"
                         ;;
-                    7)
-                        # Option 7 is either "Install" or "Exit" depending on install status
+                    8)
+                        # Option 8 is either "Install" or "Exit" depending on install status
                         if [ "$SCRIPT_INSTALLED" = false ]; then
                             install_script
                             # Update status if installation succeeded
@@ -2651,8 +2824,8 @@ main() {
                             exit 0
                         fi
                         ;;
-                    8)
-                        # Option 8 only exists when not installed (it's Exit)
+                    9)
+                        # Option 9 only exists when not installed (it's Exit)
                         if [ "$SCRIPT_INSTALLED" = false ]; then
                             info "Exiting"
                             exit 0

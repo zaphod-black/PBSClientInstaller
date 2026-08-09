@@ -92,8 +92,9 @@ After installation, you can manage multiple backup targets:
 3. **Edit existing target** - Update connection/settings
 4. **Delete target** - Remove a backup destination
 5. **Run backup now** - Test or run immediate backup
-6. **Reinstall PBS client** - Reinstall the backup software
-7. **Exit**
+6. **Browse backups** - List snapshots and explore them via the interactive catalog shell
+7. **Reinstall PBS client** - Reinstall the backup software
+8. **Exit**
 
 ### Running Backups
 
@@ -131,6 +132,16 @@ sudo journalctl -fu pbs-backup-default.service
 # List all backups on server (add --ns <namespace> for a specific namespace)
 sudo -E proxmox-backup-client snapshot list
 ```
+
+### Browsing Backups
+
+Select **option 6 (Browse backups)** from the main menu, pick a target, then a
+snapshot. You can:
+- **Interactive catalog shell** - navigate, search and restore individual files (`ls`, `cd`, `find`, `select`, `restore-selected`)
+- **Catalog dump** - read-only listing of the snapshot's contents
+
+This uses the client's built-in `catalog shell`/`catalog dump` commands, so no
+extra dependencies are needed. Namespace-based targets are handled automatically.
 
 ## Command-Line Options
 

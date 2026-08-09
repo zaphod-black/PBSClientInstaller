@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Native installer: browse backups**
+  - New `6) Browse backups` menu option lists snapshots per target via `proxmox-backup-client snapshot list` (respects `PBS_NAMESPACE`)
+  - Snapshot explorer submenu with interactive `catalog shell` (navigate/search/restore files) and read-only `catalog dump`
+  - No extra dependencies (no FUSE); mount and full restore to come in a later iteration
 - **Docker-based cross-platform solution (v1.2.0 - IN DEVELOPMENT)**
   - Full Docker implementation for Windows, macOS, and Linux
   - Dockerfile with PBS client in Debian container
