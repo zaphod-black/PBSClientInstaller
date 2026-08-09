@@ -33,6 +33,7 @@ sudo PBSClientTool
 - Internet connection
 - Supported OS: Ubuntu 20.04+, Debian 10+, Arch Linux
 - **Arch only:** Install `yay` first ([instructions](https://github.com/Jguer/yay))
+- **arm64 (Raspberry Pi, ARM SBCs, Apple Silicon Linux):** supported via community packages from [`wofferl/proxmox-backup-arm64`](https://github.com/wofferl/proxmox-backup-arm64). The latest release is resolved automatically; pin one with `PROXMOX_ARM64_CLIENT_VERSION=<version>` (optional).
 
 ### On Proxmox Backup Server
 
@@ -69,8 +70,9 @@ sudo PBSClientTool
 
 You'll be asked for:
 1. **PBS Server:** IP/hostname and port
-2. **Authentication:** API token (recommended) or password
-3. **Backup Type:**
+2. **Datastore:** Name of the datastore, plus an optional **namespace** (leave empty for the root namespace, e.g. `tenant1` or `a/b/c`)
+3. **Authentication:** API token (recommended) or password
+4. **Backup Type:**
    - File-level only (fast, selective restore)
    - Block device only (full disk image, bootable as VM)
    - **Both (recommended)** - Files daily + disk weekly
@@ -90,8 +92,9 @@ After installation, you can manage multiple backup targets:
 3. **Edit existing target** - Update connection/settings
 4. **Delete target** - Remove a backup destination
 5. **Run backup now** - Test or run immediate backup
-6. **Reinstall PBS client** - Reinstall the backup software
-7. **Exit**
+6. **Browse backups** - List snapshots and explore them via the interactive catalog shell
+7. **Reinstall PBS client** - Reinstall the backup software
+8. **Exit**
 
 ### Running Backups
 
@@ -126,9 +129,19 @@ sudo journalctl -u pbs-backup-default.service -n 50
 # Follow logs in real-time
 sudo journalctl -fu pbs-backup-default.service
 
-# List all backups on server
+# List all backups on server (add --ns <namespace> for a specific namespace)
 sudo -E proxmox-backup-client snapshot list
 ```
+
+### Browsing Backups
+
+Select **option 6 (Browse backups)** from the main menu, pick a target, then a
+snapshot. You can:
+- **Interactive catalog shell** - navigate, search and restore individual files (`ls`, `cd`, `find`, `select`, `restore-selected`)
+- **Catalog dump** - read-only listing of the snapshot's contents
+
+This uses the client's built-in `catalog shell`/`catalog dump` commands, so no
+extra dependencies are needed. Namespace-based targets are handled automatically.
 
 ## Command-Line Options
 

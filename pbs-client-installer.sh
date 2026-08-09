@@ -9,12 +9,17 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Script configuration
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.4"
 SCRIPT_NAME="PBSClientTool"
 INSTALL_PATH="/usr/local/bin/$SCRIPT_NAME"
 CONFIG_DIR="/etc/proxmox-backup-client"
 TARGETS_DIR="$CONFIG_DIR/targets"
 LOG_FILE="/var/log/pbs-client-installer.log"
+
+# Default change detection mode for file backups.
+# metadata = faster, only stores file metadata (requires PBS >= 3.0 server)
+# legacy   = full file hashing, compatible with older servers/restore tooling
+CHANGE_DETECTION_MODE="metadata"
 
 # Helper functions
 log() {
@@ -559,36 +564,191 @@ detect_distro() {
     OS=$(echo "$OS" | tr '[:upper:]' '[:lower:]')
 }
 
+# Detect CPU architecture
+detect_cpu() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# Install PBS client on arm64 (Raspberry Pi, ARM SBCs, Apple Silicon Linux).
+# The official Proxmox repository only ships amd64 binaries, so we use the
+# community arm64 packages from https://github.com/wofferl/proxmox-backup-arm64
+install_arm64_client() {
+    log "Installing Proxmox Backup Client for arm64..."
+
+    # Map OS version to the matching community build suite
+    local SUITE=""
+    case "$OS" in
+        debian)
+            case "$OS_VERSION" in
+                13*)
+                    SUITE="trixie"
+                    ;;
+                12*|11*)
+                    SUITE="bookworm"
+                    ;;
+                10*)
+                    error "No arm64 client available for Debian $OS_VERSION (builds exist for bookworm/trixie)"
+                    exit 1
+                    ;;
+                *)
+                    error "Unsupported Debian version for arm64: $OS_VERSION"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        ubuntu)
+            case "$OS_VERSION" in
+                25.*|26.*)
+                    SUITE="trixie"
+                    ;;
+                24.*|22.*|20.*)
+                    SUITE="bookworm"
+                    ;;
+                *)
+                    error "Unsupported Ubuntu version for arm64: $OS_VERSION"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *)
+            error "Unsupported distribution for arm64: $OS"
+            exit 1
+            ;;
+    esac
+    log "Using ${SUITE} arm64 build"
+
+    # Env override for pinning an explicit version
+    local PINNED_VERSION="${PROXMOX_ARM64_CLIENT_VERSION:-}"
+
+    local VERSION=""
+    local FALLBACK_VER="4.2.5-1"
+    [ "$SUITE" = "bookworm" ] && FALLBACK_VER="3.4.8-3"
+
+    if [ -n "$PINNED_VERSION" ]; then
+        VERSION="$PINNED_VERSION"
+        log "Using pinned client version: $VERSION"
+    else
+        # Resolve latest release for this suite from the GitHub API (no jq dependency)
+        local MAJOR="4"
+        [ "$SUITE" = "bookworm" ] && MAJOR="3"
+
+        local releases=""
+        if command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
+            releases=$(wget -qO- --connect-timeout=15 --timeout=30 \
+                "https://api.github.com/repos/wofferl/proxmox-backup-arm64/releases?per_page=100" 2>/dev/null || true)
+        else
+            releases=$(curl -sS --connect-timeout 15 --max-time 30 \
+                "https://api.github.com/repos/wofferl/proxmox-backup-arm64/releases?per_page=100" 2>/dev/null || true)
+        fi
+
+        if [ -n "$releases" ]; then
+            VERSION=$(printf '%s' "$releases" \
+                | grep -oE '"tag_name": *"[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?"' \
+                | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' \
+                | grep -E "^${MAJOR}\." \
+                | sort -V | tail -n1)
+        fi
+
+        if [ -z "$VERSION" ]; then
+            warn "Could not resolve latest ${SUITE} release; falling back to $FALLBACK_VER"
+            VERSION="$FALLBACK_VER"
+        fi
+        log "Latest arm64 client version: $VERSION"
+    fi
+
+    local DEB_NAME="proxmox-backup-client_${VERSION}_arm64.deb"
+    local DEB_URL="https://github.com/wofferl/proxmox-backup-arm64/releases/download/${VERSION}/${DEB_NAME}"
+
+    log "Downloading ${DEB_NAME}..."
+    if command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
+        DOWNLOAD_OK=$(wget -q --connect-timeout=15 --timeout=120 -O "/tmp/${DEB_NAME}" "$DEB_URL" 2>/dev/null && echo ok || echo fail)
+    else
+        DOWNLOAD_OK=$(curl -fsSL --connect-timeout 15 --max-time 120 "$DEB_URL" -o "/tmp/${DEB_NAME}" 2>/dev/null && echo ok || echo fail)
+    fi
+    if [ "$DOWNLOAD_OK" != "ok" ]; then
+        error "Failed to download ${DEB_URL}"
+        info "Retry with a pinned version: PROXMOX_ARM64_CLIENT_VERSION=<version> sudo ./pbs-client-installer.sh --install"
+        exit 1
+    fi
+
+    log "Installing ${DEB_NAME}..."
+    if ! apt-get install -y "/tmp/${DEB_NAME}"; then
+        error "Installation failed"
+        exit 1
+    fi
+
+    rm -f "/tmp/${DEB_NAME}"
+    log "PBS client installed successfully"
+}
+
 # Install PBS client on Ubuntu
 install_ubuntu() {
     log "Installing Proxmox Backup Client on Ubuntu $OS_VERSION..."
-    
-    # Determine which repository to use
-    if [[ "$OS_VERSION" == "24.04" ]] || [[ "$OS_VERSION" > "24" ]]; then
-        REPO="bookworm"
-        GPG_FILE="proxmox-release-bookworm.gpg"
-    elif [[ "$OS_VERSION" == "22.04" ]]; then
-        REPO="bullseye"
-        GPG_FILE="proxmox-release-bullseye.gpg"
-        # Need to add Focal security repo for libssl1.1
-        NEED_FOCAL=true
-    elif [[ "$OS_VERSION" == "20.04" ]]; then
-        REPO="bullseye"
-        GPG_FILE="proxmox-release-bullseye.gpg"
-    else
-        error "Unsupported Ubuntu version: $OS_VERSION"
-        exit 1
+
+    # On arm64 the official Proxmox repo only ships amd64 -> use community builds
+    if [ "$(detect_cpu)" = "arm64" ]; then
+        install_arm64_client
+        return 0
     fi
+
+    # Determine which repository to use
+    case "$OS_VERSION" in
+        25.*|26.*)
+            # Ubuntu 25+ (trixie based) - unified archive keyring
+            REPO="trixie"
+            GPG_FILE="proxmox-archive-keyring-trixie.gpg"
+            KEY_TYPE="archive"
+            NEED_FOCAL=false
+            ;;
+        24.*)
+            REPO="bookworm"
+            GPG_FILE="proxmox-release-bookworm.gpg"
+            KEY_TYPE="release"
+            NEED_FOCAL=false
+            ;;
+        22.*)
+            REPO="bullseye"
+            GPG_FILE="proxmox-release-bullseye.gpg"
+            KEY_TYPE="release"
+            # Need to add Focal security repo for libssl1.1
+            NEED_FOCAL=true
+            ;;
+        20.*)
+            REPO="bullseye"
+            GPG_FILE="proxmox-release-bullseye.gpg"
+            KEY_TYPE="release"
+            NEED_FOCAL=false
+            ;;
+        *)
+            error "Unsupported Ubuntu version: $OS_VERSION"
+            exit 1
+            ;;
+    esac
     
     # Download and install GPG key
     log "Downloading GPG key..."
-    wget -q "https://enterprise.proxmox.com/debian/${GPG_FILE}" \
-        -O "/etc/apt/trusted.gpg.d/${GPG_FILE}"
+    if [ "$KEY_TYPE" = "archive" ]; then
+        # Unified archive keyring (trixie based) goes in /usr/share/keyrings
+        wget -q "https://enterprise.proxmox.com/debian/${GPG_FILE}" \
+            -O "/usr/share/keyrings/${GPG_FILE}"
+    else
+        wget -q "https://enterprise.proxmox.com/debian/${GPG_FILE}" \
+            -O "/etc/apt/trusted.gpg.d/${GPG_FILE}"
+    fi
     
     # Add PBS client repository
     log "Adding PBS client repository..."
-    echo "deb [arch=amd64] http://download.proxmox.com/debian/pbs-client ${REPO} main" > \
-        /etc/apt/sources.list.d/pbs-client.list
+    if [ "$KEY_TYPE" = "archive" ]; then
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/${GPG_FILE}] http://download.proxmox.com/debian/pbs-client ${REPO} main" > \
+            /etc/apt/sources.list.d/pbs-client.list
+    else
+        echo "deb [arch=amd64] http://download.proxmox.com/debian/pbs-client ${REPO} main" > \
+            /etc/apt/sources.list.d/pbs-client.list
+    fi
     
     # Add Focal security repo if needed (Ubuntu 22.04)
     if [ "$NEED_FOCAL" = true ]; then
@@ -610,20 +770,34 @@ install_ubuntu() {
 # Install PBS client on Debian
 install_debian() {
     log "Installing Proxmox Backup Client on Debian $OS_VERSION..."
-    
+
+    # On arm64 the official Proxmox repo only ships amd64 -> use community builds
+    if [ "$(detect_cpu)" = "arm64" ]; then
+        install_arm64_client
+        return 0
+    fi
+
     # Determine repository based on Debian version
     case "$OS_VERSION" in
+        13*)
+            REPO="trixie"
+            GPG_FILE="proxmox-archive-keyring-trixie.gpg"
+            KEY_TYPE="archive"
+            ;;
         12*)
             REPO="bookworm"
             GPG_FILE="proxmox-release-bookworm.gpg"
+            KEY_TYPE="release"
             ;;
         11*)
             REPO="bullseye"
             GPG_FILE="proxmox-release-bullseye.gpg"
+            KEY_TYPE="release"
             ;;
         10*)
             REPO="buster"
             GPG_FILE="proxmox-release-buster.gpg"
+            KEY_TYPE="release"
             ;;
         *)
             error "Unsupported Debian version: $OS_VERSION"
@@ -633,13 +807,24 @@ install_debian() {
     
     # Download and install GPG key
     log "Downloading GPG key..."
-    wget -q "https://enterprise.proxmox.com/debian/${GPG_FILE}" \
-        -O "/etc/apt/trusted.gpg.d/${GPG_FILE}"
+    if [ "$KEY_TYPE" = "archive" ]; then
+        # Unified archive keyring (Debian 13 / trixie) goes in /usr/share/keyrings
+        wget -q "https://enterprise.proxmox.com/debian/${GPG_FILE}" \
+            -O "/usr/share/keyrings/${GPG_FILE}"
+    else
+        wget -q "https://enterprise.proxmox.com/debian/${GPG_FILE}" \
+            -O "/etc/apt/trusted.gpg.d/${GPG_FILE}"
+    fi
     
     # Add PBS client repository
     log "Adding PBS client repository..."
-    echo "deb [arch=amd64] http://download.proxmox.com/debian/pbs-client ${REPO} main" > \
-        /etc/apt/sources.list.d/pbs-client.list
+    if [ "$KEY_TYPE" = "archive" ]; then
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/${GPG_FILE}] http://download.proxmox.com/debian/pbs-client ${REPO} main" > \
+            /etc/apt/sources.list.d/pbs-client.list
+    else
+        echo "deb [arch=amd64] http://download.proxmox.com/debian/pbs-client ${REPO} main" > \
+            /etc/apt/sources.list.d/pbs-client.list
+    fi
     
     # Update and install
     log "Updating package lists..."
@@ -719,6 +904,7 @@ reconfigure_connection() {
     PBS_SERVER=$(prompt "Enter PBS server IP/hostname" "192.168.1.181" | xargs)
     PBS_PORT=$(prompt "Enter PBS server port" "8007" | xargs)
     PBS_DATASTORE=$(prompt "Enter datastore name" "backups" | xargs)
+    PBS_NAMESPACE=$(prompt "Enter namespace (optional, empty = root)" "" | xargs)
 
     echo
     info "Authentication Method:"
@@ -754,9 +940,16 @@ reconfigure_connection() {
     fi
 
     # Load existing configuration and update only connection details
-    if [ -f "$CONFIG_DIR/config" ]; then
+    local CONFIG_FILE=""
+    if [ -n "${TARGET_NAME:-}" ] && [ -f "$(get_target_config_path "$TARGET_NAME")" ]; then
+        CONFIG_FILE="$(get_target_config_path "$TARGET_NAME")"
+    elif [ -f "$CONFIG_DIR/config" ]; then
+        CONFIG_FILE="$CONFIG_DIR/config"
+    fi
+
+    if [ -n "$CONFIG_FILE" ]; then
         log "Loading existing backup configuration..."
-        source "$CONFIG_DIR/config"
+        source "$CONFIG_FILE"
     else
         error "No existing configuration found. Please run full configuration."
         exit 1
@@ -768,10 +961,35 @@ reconfigure_connection() {
     # Strip any trailing newlines from password (defensive fix)
     PBS_PASSWORD_CLEAN=$(echo -n "$PBS_PASSWORD" | tr -d '\n\r')
 
-    cat > "$CONFIG_DIR/config" <<EOF
+    if [ -n "${TARGET_NAME:-}" ]; then
+        cat > "$CONFIG_FILE" <<EOF
+# PBS Client Configuration - Target: $TARGET_NAME
+PBS_SERVER="${PBS_SERVER}"
+PBS_PORT="${PBS_PORT}"
+PBS_DATASTORE="${PBS_DATASTORE}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
+PBS_REPOSITORY="${PBS_REPOSITORY}"
+PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
+BACKUP_TYPE="${BACKUP_TYPE}"
+BACKUP_PATHS="${BACKUP_PATHS}"
+EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS}"
+BLOCK_DEVICE="${BLOCK_DEVICE}"
+BLOCK_DEVICE_FREQUENCY="${BLOCK_DEVICE_FREQUENCY}"
+BLOCK_DEVICE_DAY="${BLOCK_DEVICE_DAY}"
+TIMER_SCHEDULE="${TIMER_SCHEDULE}"
+TIMER_ONCALENDAR="${TIMER_ONCALENDAR}"
+KEEP_LAST=${KEEP_LAST}
+KEEP_DAILY=${KEEP_DAILY}
+KEEP_WEEKLY=${KEEP_WEEKLY}
+KEEP_MONTHLY=${KEEP_MONTHLY}
+CHANGE_DETECTION_MODE="${CHANGE_DETECTION_MODE:-metadata}"
+EOF
+    else
+        cat > "$CONFIG_FILE" <<EOF
 # PBS Client Configuration
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
 BACKUP_TYPE="${BACKUP_TYPE}"
 BACKUP_PATHS="${BACKUP_PATHS}"
 EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS}"
@@ -780,9 +998,11 @@ KEEP_LAST=${KEEP_LAST}
 KEEP_DAILY=${KEEP_DAILY}
 KEEP_WEEKLY=${KEEP_WEEKLY}
 KEEP_MONTHLY=${KEEP_MONTHLY}
+CHANGE_DETECTION_MODE="${CHANGE_DETECTION_MODE:-metadata}"
 EOF
+    fi
 
-    chmod 600 "$CONFIG_DIR/config"
+    chmod 600 "$CONFIG_FILE"
 
     log "Connection configuration updated successfully!"
     echo
@@ -799,9 +1019,16 @@ reconfigure_backup_settings() {
     log "Reconfiguring backup settings..."
     echo
 
+    local CONFIG_FILE=""
+    if [ -n "${TARGET_NAME:-}" ]; then
+        CONFIG_FILE="$(get_target_config_path "$TARGET_NAME")"
+    else
+        CONFIG_FILE="$CONFIG_DIR/config"
+    fi
+
     # Load existing configuration to preserve connection details
-    if [ -f "$CONFIG_DIR/config" ]; then
-        source "$CONFIG_DIR/config"
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
     else
         error "No existing configuration found. Please run full configuration."
         exit 1
@@ -936,12 +1163,18 @@ reconfigure_backup_settings() {
     # Regenerate systemd service with new settings
     echo
     log "Updating systemd service configuration..."
-    create_systemd_service
+    if [ -n "$TARGET_NAME" ]; then
+        create_systemd_service_for_target "$TARGET_NAME"
+        TIMER_UNIT="pbs-backup-${TARGET_NAME}.timer"
+    else
+        create_systemd_service
+        TIMER_UNIT="pbs-backup.timer"
+    fi
 
     # Restart services
     log "Restarting backup timer..."
     systemctl daemon-reload
-    systemctl restart pbs-backup.timer
+    systemctl restart "$TIMER_UNIT"
 
     echo
     log "Backup settings updated successfully!"
@@ -975,11 +1208,11 @@ reconfigure_backup_settings() {
     # Show service status
     info "Backup Service Status:"
     echo "────────────────────────────────────────────────────────────"
-    systemctl status pbs-backup.timer --no-pager -l || true
+    systemctl status "$TIMER_UNIT" --no-pager -l || true
     echo "────────────────────────────────────────────────────────────"
     echo
     info "Next scheduled backup:"
-    systemctl list-timers pbs-backup.timer --no-pager || true
+    systemctl list-timers "$TIMER_UNIT" --no-pager || true
 }
 
 # Per-target wrapper functions
@@ -1117,6 +1350,175 @@ run_backup_for_target() {
     fi
 }
 
+# Browse backups for a target (snapshot list + interactive catalog shell)
+browse_backups() {
+    echo
+    echo "Available targets:"
+    list_targets | nl
+    echo
+    USER_INPUT=$(prompt "Enter target number or name to browse" "")
+
+    if [ -z "$USER_INPUT" ]; then
+        error "No target specified"
+        return 1
+    fi
+
+    TARGET_NAME=$(resolve_target_input "$USER_INPUT")
+    if [ -z "$TARGET_NAME" ]; then
+        error "Invalid target number: $USER_INPUT"
+        return 1
+    fi
+
+    if ! validate_target_name "$TARGET_NAME"; then
+        return 1
+    fi
+
+    if ! target_exists "$TARGET_NAME"; then
+        error "Target '$TARGET_NAME' does not exist"
+        return 1
+    fi
+
+    local config_file="$(get_target_config_path "$TARGET_NAME")"
+    source "$config_file"
+
+    export PBS_REPOSITORY="$PBS_REPOSITORY"
+    export PBS_PASSWORD="$PBS_PASSWORD"
+    export PBS_NAMESPACE="${PBS_NAMESPACE:-}"
+
+    # Optional namespace (empty = root); used by snapshot list
+    local NS_ARG=""
+    if [ -n "${PBS_NAMESPACE:-}" ]; then
+        NS_ARG="--ns ${PBS_NAMESPACE}"
+    fi
+
+    # Step 1: list snapshots on the server
+    echo
+    info "Loading snapshots for target: $TARGET_NAME"
+    local SNAP_LIST
+    if ! SNAP_LIST=$(timeout 30 proxmox-backup-client snapshot list $NS_ARG 2>&1); then
+        warn "Could not list snapshots."
+        warn "If this is a fresh target, run a backup first."
+        echo "$SNAP_LIST" | tail -n2
+        return 1
+    fi
+
+    # Parse snapshot ids (first column) and their archive list (files column)
+    local PARSED SNAPSHOTS=() SNAPSHOT_FILES=()
+    PARSED=$(echo "$SNAP_LIST" | sed -E 's/[│┼├┤┬┴╪╞╡═─]//g' | awk '
+        {
+            if ($1 != "snapshot" && $1 ~ /^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[0-9]{4}-[0-9]{2}-[0-9]{2}T/) {
+                files="";
+                for (i=3; i<=NF; i++) files = files (i>3 ? " " : "") $i;
+                print $1 "\t" files;
+            }
+        }')
+
+    while IFS=$'\t' read -r snap files; do
+        [ -z "$snap" ] && continue
+        SNAPSHOTS+=("$snap")
+        SNAPSHOT_FILES+=("$files")
+    done <<< "$PARSED"
+
+    if [ ${#SNAPSHOTS[@]} -eq 0 ]; then
+        warn "No backups found in this datastore/namespace yet"
+        return 1
+    fi
+
+    # Step 2: let the user pick a snapshot
+    local SELECTED=""
+    while [ -z "$SELECTED" ]; do
+        echo
+        echo "Available snapshots for target: $TARGET_NAME"
+        echo "────────────────────────────────────────────"
+        local idx=1
+        for snap in "${SNAPSHOTS[@]}"; do
+            echo "  $idx) $snap"
+            idx=$((idx+1))
+        done
+        echo "  0) Go back"
+        echo
+        local CHOICE=$(prompt "Select a snapshot to explore [1-${#SNAPSHOTS[@]}]" "0")
+
+        if [ -z "$CHOICE" ] || [ "$CHOICE" = "0" ]; then
+            info "Cancelled"
+            return 0
+        fi
+
+        if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "${#SNAPSHOTS[@]}" ]; then
+            SELECTED="${SNAPSHOTS[$((CHOICE-1))]}"
+        else
+            error "Invalid choice: $CHOICE"
+        fi
+    done
+
+    browse_snapshot "$TARGET_NAME" "$SELECTED" "${SNAPSHOT_FILES[$((CHOICE-1))]}"
+}
+
+# Interactive browse menu for a single snapshot (catalog shell / catalog dump)
+browse_snapshot() {
+    local target="$1"
+    local snapshot="$2"
+    local files="$3"
+
+    # Browse commands support --ns (verified against the client command reference)
+    local NS_ARG=""
+    if [ -n "${PBS_NAMESPACE:-}" ]; then
+        NS_ARG="--ns ${PBS_NAMESPACE}"
+    fi
+
+    # Pick a default archive: prefer an existing .pxar/.mpxar if present
+    local DEFAULT_ARCHIVE=""
+    for f in $files; do
+        if [[ "$f" == *.pxar || "$f" == *.mpxar ]]; then
+            DEFAULT_ARCHIVE="$f"
+            break
+        fi
+    done
+    [ -z "$DEFAULT_ARCHIVE" ] && DEFAULT_ARCHIVE="root.pxar"
+
+    while true; do
+        echo
+        echo "════════════════════════════════════════"
+        echo "  Snapshot: $snapshot"
+        echo "════════════════════════════════════════"
+        echo
+        echo "  Archives in snapshot: $files"
+        echo
+        echo "  1) Interactive catalog shell (navigate, search, restore files)"
+        echo "  2) Catalog dump (read-only file listing)"
+        echo "  3) Choose a different snapshot"
+        echo "  4) Back to main menu"
+        echo
+        BROWSE_OPT=$(prompt "Select option [1-4]" "1")
+
+        case "$BROWSE_OPT" in
+            1)
+                local ARCHIVE
+                ARCHIVE=$(prompt "File archive to explore" "$DEFAULT_ARCHIVE")
+                [ -z "$ARCHIVE" ] && ARCHIVE="$DEFAULT_ARCHIVE"
+                echo
+                info "Starting interactive catalog shell (type 'help' for commands, 'exit' to quit)"
+                echo
+                proxmox-backup-client catalog shell "$snapshot" "$ARCHIVE" $NS_ARG
+                ;;
+            2)
+                echo
+                info "Catalog dump for $snapshot"
+                echo
+                proxmox-backup-client catalog dump "$snapshot" $NS_ARG
+                ;;
+            3)
+                browse_backups
+                return 0
+                ;;
+            4|*)
+                info "Back to main menu"
+                return 0
+                ;;
+        esac
+    done
+}
+
 # Interactive configuration
 interactive_config() {
     log "Starting interactive configuration..."
@@ -1130,6 +1532,7 @@ interactive_config() {
     PBS_SERVER=$(prompt "Enter PBS server IP/hostname" "192.168.1.181" | xargs)
     PBS_PORT=$(prompt "Enter PBS server port" "8007" | xargs)
     PBS_DATASTORE=$(prompt "Enter datastore name" "backups" | xargs)
+    PBS_NAMESPACE=$(prompt "Enter namespace (optional, empty = root)" "" | xargs)
 
     echo
     info "Authentication Method:"
@@ -1436,9 +1839,24 @@ test_connection() {
 
     # Step 3: Verify datastore access by listing backup groups
     info "Step 3/3: Verifying datastore access..."
-    if timeout 15 proxmox-backup-client list 2>/dev/null; then
+    local NS_ARG=""
+    if [ -n "${PBS_NAMESPACE:-}" ]; then
+        NS_ARG="--ns ${PBS_NAMESPACE}"
+    fi
+    if timeout 15 proxmox-backup-client snapshot list $NS_ARG 2>/dev/null; then
         log "Datastore access verified"
         log "Connection test successful!"
+        
+        # Warn when metadata change-detection is used against a PBS server < 3.0
+        # (metadata backups can only be restored by the server if it supports them)
+        SERVER_VERSION=$(timeout 5 proxmox-backup-client version 2>/dev/null | grep -oE 'server version: [0-9]+(\.[0-9]+)*' | awk '{print $3}')
+        if [ "${CHANGE_DETECTION_MODE:-metadata}" = "metadata" ] && [ -n "$SERVER_VERSION" ]; then
+            if printf '%s' "$SERVER_VERSION" | grep -qE '^(0|1|2)\.'; then
+                warn "PBS server $SERVER_VERSION may not fully support 'metadata' change detection"
+                warn "Servers older than 3.0 prefer 'legacy' mode (set CHANGE_DETECTION_MODE=\"legacy\" in config)"
+            fi
+        fi
+        
         return 0
     else
         warn "Could not list backup groups (this is normal if no backups exist yet)"
@@ -1462,6 +1880,7 @@ create_systemd_service() {
 # PBS Client Configuration
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
 BACKUP_TYPE="${BACKUP_TYPE}"
 BACKUP_PATHS="${BACKUP_PATHS}"
 EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS}"
@@ -1470,10 +1889,11 @@ KEEP_LAST=${KEEP_LAST}
 KEEP_DAILY=${KEEP_DAILY}
 KEEP_WEEKLY=${KEEP_WEEKLY}
 KEEP_MONTHLY=${KEEP_MONTHLY}
+CHANGE_DETECTION_MODE="${CHANGE_DETECTION_MODE:-metadata}"
 EOF
-    
+
     chmod 600 "$CONFIG_DIR/config"
-    
+
     # Create backup script
     cat > "$CONFIG_DIR/backup.sh" <<'EOFSCRIPT'
 #!/bin/bash
@@ -1488,6 +1908,13 @@ source /etc/proxmox-backup-client/config
 # Export for PBS client
 export PBS_REPOSITORY
 export PBS_PASSWORD
+export PBS_NAMESPACE
+
+# Optional namespace (empty = root namespace)
+NS_ARG=""
+if [ -n "${PBS_NAMESPACE:-}" ]; then
+    NS_ARG="--ns ${PBS_NAMESPACE}"
+fi
 
 HOSTNAME=$(hostname)
 BACKUP_SUCCESS=true
@@ -1514,6 +1941,16 @@ backup_files() {
         if mountpoint -q "$path" 2>/dev/null; then
             BACKUP_CMD="$BACKUP_CMD --include-dev ${path}"
         fi
+        
+        # Also include submounts below this path (e.g. /boot/efi on /)
+        if command -v findmnt &> /dev/null; then
+            for mnt in $(findmnt -R -n -o TARGET "$path" 2>/dev/null); do
+                [ "$mnt" = "$path" ] && continue
+                if mountpoint -q "$mnt" 2>/dev/null; then
+                    BACKUP_CMD="$BACKUP_CMD --include-dev ${mnt}"
+                fi
+            done
+        fi
     done
     
     # Add exclusions
@@ -1522,7 +1959,7 @@ backup_files() {
     done
     
     # Add other options
-    BACKUP_CMD="$BACKUP_CMD --skip-lost-and-found --change-detection-mode=metadata"
+    BACKUP_CMD="$BACKUP_CMD --skip-lost-and-found --change-detection-mode=${CHANGE_DETECTION_MODE:-metadata} $NS_ARG"
     
     # Execute backup
     if eval $BACKUP_CMD; then
@@ -1559,7 +1996,7 @@ backup_block_device() {
     DEVICE_NAME=$(basename "$BLOCK_DEVICE")
     
     # Create block device backup
-    if proxmox-backup-client backup "${DEVICE_NAME}.img:${BLOCK_DEVICE}"; then
+    if proxmox-backup-client backup "${DEVICE_NAME}.img:${BLOCK_DEVICE}" $NS_ARG; then
         log "Block device backup completed successfully"
         return 0
     else
@@ -1607,7 +2044,7 @@ if [ "$BACKUP_SUCCESS" = true ]; then
         --keep-last $KEEP_LAST \
         --keep-daily $KEEP_DAILY \
         --keep-weekly $KEEP_WEEKLY \
-        --keep-monthly $KEEP_MONTHLY
+        --keep-monthly $KEEP_MONTHLY $NS_ARG
     
     log "Backup and prune completed successfully"
 else
@@ -1698,6 +2135,7 @@ create_systemd_service_for_target() {
 PBS_SERVER="${PBS_SERVER}"
 PBS_PORT="${PBS_PORT}"
 PBS_DATASTORE="${PBS_DATASTORE}"
+PBS_NAMESPACE="${PBS_NAMESPACE:-}"
 PBS_REPOSITORY="${PBS_REPOSITORY}"
 PBS_PASSWORD="${PBS_PASSWORD_CLEAN}"
 BACKUP_TYPE="${BACKUP_TYPE}"
@@ -1712,6 +2150,7 @@ KEEP_LAST=${KEEP_LAST}
 KEEP_DAILY=${KEEP_DAILY}
 KEEP_WEEKLY=${KEEP_WEEKLY}
 KEEP_MONTHLY=${KEEP_MONTHLY}
+CHANGE_DETECTION_MODE="${CHANGE_DETECTION_MODE:-metadata}"
 EOF
 
     chmod 600 "$(get_target_config_path "$target_name")"
@@ -1730,6 +2169,13 @@ source $(get_target_config_path "$target_name")
 # Export for PBS client
 export PBS_REPOSITORY
 export PBS_PASSWORD
+export PBS_NAMESPACE
+
+# Optional namespace (empty = root namespace)
+NS_ARG=""
+if [ -n "\${PBS_NAMESPACE:-}" ]; then
+    NS_ARG="--ns \${PBS_NAMESPACE}"
+fi
 
 HOSTNAME=\$(hostname)
 BACKUP_SUCCESS=true
@@ -1756,6 +2202,16 @@ backup_files() {
         if mountpoint -q "\$path" 2>/dev/null; then
             BACKUP_CMD="\$BACKUP_CMD --include-dev \${path}"
         fi
+
+        # Also include submounts below this path (e.g. /boot/efi on /)
+        if command -v findmnt &> /dev/null; then
+            for mnt in \$(findmnt -R -n -o TARGET "\$path" 2>/dev/null); do
+                [ "\$mnt" = "\$path" ] && continue
+                if mountpoint -q "\$mnt" 2>/dev/null; then
+                    BACKUP_CMD="\$BACKUP_CMD --include-dev \${mnt}"
+                fi
+            done
+        fi
     done
 
     # Add exclusions
@@ -1764,7 +2220,7 @@ backup_files() {
     done
 
     # Add other options
-    BACKUP_CMD="\$BACKUP_CMD --skip-lost-and-found --change-detection-mode=metadata"
+    BACKUP_CMD="\$BACKUP_CMD --skip-lost-and-found --change-detection-mode=\${CHANGE_DETECTION_MODE:-metadata} \$NS_ARG"
 
     # Execute backup
     if eval \$BACKUP_CMD; then
@@ -1801,7 +2257,7 @@ backup_block_device() {
     DEVICE_NAME=\$(basename "\$BLOCK_DEVICE")
 
     # Create block device backup
-    if proxmox-backup-client backup "\${DEVICE_NAME}.img:\${BLOCK_DEVICE}"; then
+    if proxmox-backup-client backup "\${DEVICE_NAME}.img:\${BLOCK_DEVICE}" \$NS_ARG; then
         log "Block device backup completed successfully"
         return 0
     else
@@ -1898,7 +2354,7 @@ if [ "\$BACKUP_SUCCESS" = true ]; then
         --keep-last \$KEEP_LAST \\
         --keep-daily \$KEEP_DAILY \\
         --keep-weekly \$KEEP_WEEKLY \\
-        --keep-monthly \$KEEP_MONTHLY
+        --keep-monthly \$KEEP_MONTHLY \$NS_ARG
 
     log "Backup and prune completed successfully"
 else
@@ -2059,7 +2515,7 @@ show_summary() {
     echo "  Check timer status:  sudo systemctl status pbs-backup.timer"
     echo "  Check service logs:  sudo journalctl -u pbs-backup.service"
     echo "  Run backup now:      sudo systemctl start pbs-backup.service"
-    echo "  List backups:        sudo -E proxmox-backup-client snapshot list"
+    echo "  List backups:        sudo -E proxmox-backup-client snapshot list${PBS_NAMESPACE:+ --ns ${PBS_NAMESPACE}}"
     echo "  Disable backups:     sudo systemctl disable pbs-backup.timer"
     echo
     info "Configuration Files:"
@@ -2170,6 +2626,16 @@ OPTIONS:
     --uninstall     Uninstall PBSClientTool from system
     --help, -h      Show this help message
     --version, -v   Show version information
+    --change-detection-mode, --mode METADATA|LEGACY
+                    Set how file-level backups detect changed files:
+                    metadata = fast, only stores file metadata (needs PBS >= 3.0 server)
+                    legacy   = full content scanning (compatible with older servers)
+
+ARCHITECTURES:
+    amd64           Uses the official Proxmox repository (default)
+    arm64           Uses community packages from wofferl/proxmox-backup-arm64
+                    (latest release resolved automatically; override with
+                    PROXMOX_ARM64_CLIENT_VERSION=<version>)
 
 INTERACTIVE MODE (default):
     Run without arguments to launch the interactive menu for managing backup targets.
@@ -2254,16 +2720,17 @@ main() {
                 echo "  3) Edit existing target"
                 echo "  4) Delete target"
                 echo "  5) Run backup now (select target)"
-                echo "  6) Reinstall PBS client"
+                echo "  6) Browse backups (snapshot list + catalog shell)"
+                echo "  7) Reinstall PBS client"
 
                 # Only show install option if not already installed
                 if [ "$SCRIPT_INSTALLED" = false ]; then
-                    echo "  7) Install as system command"
+                    echo "  8) Install as system command"
+                    echo "  9) Exit"
+                    ACTION=$(prompt "Select option [1-9]" "9")
+                else
                     echo "  8) Exit"
                     ACTION=$(prompt "Select option [1-8]" "8")
-                else
-                    echo "  7) Exit"
-                    ACTION=$(prompt "Select option [1-7]" "7")
                 fi
 
                 case "$ACTION" in
@@ -2337,12 +2804,15 @@ main() {
                         run_backup_for_target "$TARGET_NAME"
                         ;;
                     6)
+                        browse_backups
+                        ;;
+                    7)
                         info "Reinstalling PBS client..."
                         install_pbs_client
                         log "PBS client reinstalled successfully"
                         ;;
-                    7)
-                        # Option 7 is either "Install" or "Exit" depending on install status
+                    8)
+                        # Option 8 is either "Install" or "Exit" depending on install status
                         if [ "$SCRIPT_INSTALLED" = false ]; then
                             install_script
                             # Update status if installation succeeded
@@ -2354,8 +2824,8 @@ main() {
                             exit 0
                         fi
                         ;;
-                    8)
-                        # Option 8 only exists when not installed (it's Exit)
+                    9)
+                        # Option 9 only exists when not installed (it's Exit)
                         if [ "$SCRIPT_INSTALLED" = false ]; then
                             info "Exiting"
                             exit 0
@@ -2473,6 +2943,51 @@ main() {
     exit 1
 }
 
+# Apply change-detection mode to all configured targets (and legacy config)
+apply_change_detection_mode() {
+    MODE="$1"
+
+    case "$MODE" in
+        metadata|legacy)
+            ;;
+        *)
+            error "Invalid change-detection mode: $MODE (use 'metadata' or 'legacy')"
+            exit 1
+            ;;
+    esac
+
+    CHANGE_DETECTION_MODE="$MODE"
+
+    # Update legacy config if present
+    APPS_UPDATED=0
+    if [ -f "$CONFIG_DIR/config" ]; then
+        if grep -q '^CHANGE_DETECTION_MODE=' "$CONFIG_DIR/config"; then
+            sed -i "s|^CHANGE_DETECTION_MODE=.*|CHANGE_DETECTION_MODE=\"${MODE}\"|" "$CONFIG_DIR/config"
+        else
+            echo "CHANGE_DETECTION_MODE=\"${MODE}\"" >> "$CONFIG_DIR/config"
+        fi
+        APPS_UPDATED=$((APPS_UPDATED + 1))
+    fi
+
+    # Update each target config
+    for target_conf in "$TARGETS_DIR"/*.conf; do
+        [ -f "$target_conf" ] || continue
+        if grep -q '^CHANGE_DETECTION_MODE=' "$target_conf"; then
+            sed -i "s|^CHANGE_DETECTION_MODE=.*|CHANGE_DETECTION_MODE=\"${MODE}\"|" "$target_conf"
+        else
+            echo "CHANGE_DETECTION_MODE=\"${MODE}\"" >> "$target_conf"
+        fi
+        APPS_UPDATED=$((APPS_UPDATED + 1))
+    done
+
+    if [ "$APPS_UPDATED" -gt 0 ]; then
+        log "Updated change-detection-mode to '$MODE' in $APPS_UPDATED config(s)"
+        info "Backup scripts will pick this up on their next run."
+    else
+        info "No existing config found. Defaults set - the mode will be applied when you create a target."
+    fi
+}
+
 # Parse command-line arguments
 case "${1:-}" in
     --install)
@@ -2486,6 +3001,9 @@ case "${1:-}" in
         ;;
     --version|-v)
         show_version
+        ;;
+    --change-detection-mode|--mode)
+        apply_change_detection_mode "${2:-}"
         ;;
     "")
         # No arguments - run interactive mode

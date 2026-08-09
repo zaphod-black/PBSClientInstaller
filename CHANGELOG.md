@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Docker-based cross-platform solution (v1.2.0 - NEW!)**
+- **Docker-based cross-platform solution (v1.2.0 - IN DEVELOPMENT)**
   - Full Docker implementation for Windows, macOS, and Linux
   - Dockerfile with PBS client in Debian container
   - Platform-specific docker-compose files (linux/windows/macos)
@@ -23,6 +23,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Cross-platform backup support matrix in README
   - Platform-specific exclusion patterns
   - Metadata change detection for fast incrementals
+
+## [1.1.4] - 2026-08-08
+
+### Added
+- **Native installer: browse backups**
+  - New `6) Browse backups` menu option lists snapshots per target via `proxmox-backup-client snapshot list` (respects `PBS_NAMESPACE`)
+  - Snapshot explorer submenu with interactive `catalog shell` (navigate/search/restore files) and read-only `catalog dump`
+  - No extra dependencies (no FUSE); mount and full restore to come in a later iteration
+
+## [1.1.3] - 2026-08-08
+
+### Added
+- **Native installer: configurable change-detection mode**
+  - New `--change-detection-mode` / `--mode METADATA|LEGACY` CLI flag (applies to existing configs)
+  - `CHANGE_DETECTION_MODE` persisted in legacy and per-target config files; backup scripts use it at runtime
+  - `test_connection()` warns when `metadata` mode is used against a PBS server older than 3.0
+  - `metadata` remains the default (fast incrementals); `legacy` restores full compatibility
+- **Native installer: Debian 13 / trixie and Ubuntu 25+ support**
+  - Uses the unified `proxmox-archive-keyring-trixie.gpg` keyring with `signed-by=` for trixie-based releases
+  - Existing legacy per-release keys (`/etc/apt/trusted.gpg.d/`) unchanged for older releases
+- **Native installer: submount point handling**
+  - `backup_files()` now discovers nested mount points (e.g. `/boot/efi` under `/`) via `findmnt -R` and adds `--include-dev` for each, in both legacy and per-target backup scripts
+- **Native installer: `snapshot list` command**
+  - Uses the modern `proxmox-backup-client snapshot list` subcommand in `test_connection()` and `test-connection.sh` (the deprecated bare `list` alias is removed)
+- **Native installer: optional PBS namespaces**
+  - Optional `PBS_NAMESPACE` config field (empty = root namespace) prompted during setup/reconfigure for both legacy and per-target configs
+  - `--ns` is threaded into backup, block-device, prune, and snapshot-list commands in generated scripts and connection tests
+  - `test-connection.sh` accepts an optional `--ns <namespace>` argument
+  - Requires a PBS server with namespaces (PBS 2.2+; supported in 3.x and 4.x)
+- **Native installer: target-aware reconfigure**
+  - `reconfigure_connection()` / `reconfigure_backup_settings()` now read/write the selected target's config and restart that target's timer/service instead of always touching the legacy single-target config
+- **Native installer: arm64 support**
+  - On arm64 (Raspberry Pi, ARM SBCs, Apple Silicon Linux) the client is installed from the community packages at `wofferl/proxmox-backup-arm64`
+  - Latest release resolved automatically per distro suite (trixie / bookworm) via the GitHub API, with a pinned fallback version
+  - Pin an exact version with `PROXMOX_ARM64_CLIENT_VERSION=<version>`
+  - amd64 installs continue to use the official Proxmox repository unchanged
 - **Multi-target backup support (v1.1.0 - COMPLETE)**
   - Support for multiple backup destinations (different PBS servers for redundancy)
   - Named backup targets (e.g., "offsite", "local", "backup1")
@@ -133,6 +169,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Scheduled backups still follow daily/weekly pattern
   - Manual backups always include block device even on non-Sunday
 - Script version bumped to 1.1.0 for multi-target support
+
+### Fixed
+- **Target-aware `reconfigure_connection()` no longer drops target-specific settings**
+  - When reconfiguring a named target, the full target config (PBS_SERVER, PBS_PORT, PBS_DATASTORE, TIMER_SCHEDULE, TIMER_ONCALENDAR, BLOCK_DEVICE_FREQUENCY, BLOCK_DEVICE_DAY) is now written, not just the legacy field subset
+  - Legacy single-target reconfigure writes the legacy config unchanged
+- **arm64 install no longer hard-requires `curl`**
+  - Falls back to `wget` when `curl` is not present (API lookup and .deb download)
 
 ### Added
 - **System-wide installation support**

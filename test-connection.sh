@@ -7,6 +7,21 @@
 #   ./test-connection.sh <server> <port> <datastore> <username> <realm> <password>
 #   or
 #   ./test-connection.sh <server> <port> <datastore> <username> <realm> <token-name> <token-secret>
+#   Optional: append --ns <namespace> to test a specific namespace (empty/omitted = root)
+
+NS_ARG=""
+FILTERED_ARGS=()
+while [ $# -gt 0 ]; do
+    if [ "$1" = "--ns" ] && [ $# -ge 2 ]; then
+        NS_ARG="--ns $2"
+        shift 2
+    else
+        FILTERED_ARGS+=("$1")
+        shift
+    fi
+done
+set -- "${FILTERED_ARGS[@]}"
+unset FILTERED_ARGS
 
 if [ $# -lt 6 ]; then
     echo "Usage:"
@@ -16,8 +31,11 @@ if [ $# -lt 6 ]; then
     echo "  Test with API token:"
     echo "    $0 <server> <port> <datastore> <username> <realm> <token-name> <token-secret>"
     echo ""
+    echo "  Optional namespace: append --ns <namespace> (empty/omitted = root namespace)"
+    echo ""
     echo "Examples:"
     echo "  $0 192.168.1.181 8007 DEAD-BACKUP root pam mypassword"
+    echo "  $0 192.168.1.181 8007 DEAD-BACKUP root pam mypassword --ns tenant1"
     echo "  $0 192.168.1.181 8007 DEAD-BACKUP root pam backup-token a1b2c3d4-e5f6-7890"
     exit 1
 fi
@@ -53,6 +71,7 @@ echo ""
 
 export PBS_REPOSITORY="$REPO"
 export PBS_PASSWORD="$PASSWORD"
+[ -n "$NS_ARG" ] && export PBS_NAMESPACE="${NS_ARG#--ns }"
 
 # Test 1: Check if server is reachable
 echo "Test 1: Server Reachability"
@@ -112,7 +131,7 @@ echo ""
 # Test 3: List backup groups
 echo "Test 3: Datastore Access"
 echo "------------------------"
-if proxmox-backup-client list 2>&1; then
+if proxmox-backup-client snapshot list $NS_ARG 2>&1; then
     echo ""
     echo "✓ Successfully accessed datastore"
 else
